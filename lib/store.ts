@@ -3,7 +3,7 @@ import { SOURCES } from "./news";
 export function db() { if (!env.DB) throw new Error("Хранилище временно недоступно."); return env.DB; }
 export async function getSetting(key: string, fallback = "") { return (await db().prepare("SELECT value FROM settings WHERE key = ?").bind(key).first<{value:string}>())?.value ?? fallback; }
 export function setSetting(key: string, value: string) { return db().prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key, value).run(); }
-export async function initialize() { await db().batch(SOURCES.map(s => db().prepare("INSERT OR IGNORE INTO sources(id) VALUES(?)").bind(s.id))); }
+export async function initialize() { if (SOURCES.length) await db().batch(SOURCES.map(s => db().prepare("INSERT OR IGNORE INTO sources(id) VALUES(?)").bind(s.id))); }
 export async function lock(key: string, ttl = 120000) {
   const owner = `${Date.now() + ttl}:${crypto.randomUUID()}`;
   const r = await db().prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(substr(settings.value,1,13) AS INTEGER) < ? RETURNING value").bind(key, owner, Date.now()).first<{value:string}>();

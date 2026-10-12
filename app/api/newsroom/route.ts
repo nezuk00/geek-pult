@@ -1,7 +1,7 @@
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { collect, connect, publish, saveDraft, state, suggestImages } from "../../../lib/service";
 import { db, getSetting, setSetting } from "../../../lib/store";
-import { SOURCES } from "../../../lib/news";
+import { SOURCES, publisherSource } from "../../../lib/news";
 export const dynamic="force-dynamic";
 function json(value:unknown,status=200){return Response.json(value,{status,headers:{"Cache-Control":"no-store"}});}
 export async function GET(){if(!await getChatGPTUser())return json({error:"Войдите в свою редакцию."},401);try{return json(await state());}catch{return json({error:"Не удалось загрузить редакцию. Попробуйте обновить страницу."},503);}}
@@ -22,7 +22,9 @@ export async function POST(request:Request){
       else{await db().prepare("UPDATE sources SET enabled=0 WHERE id='topic-search'").run();await setSetting("topic_search_enabled","0");}
       return json({saved:true,theme});
     }
-    if(action==="source"&&typeof body.enabled==="boolean"&&(SOURCES.some(s=>s.id===body.id)||(body.id==="topic-search"&&(await getSetting("channel_topic")).trim().length>0))){
+    const dynamicPublisher=typeof body.id==="string"?publisherSource(body.id):null;
+    const knownPublisher=dynamicPublisher&&(await db().prepare("SELECT id FROM sources WHERE id=?").bind(body.id).first());
+    if(action==="source"&&typeof body.enabled==="boolean"&&(SOURCES.some(s=>s.id===body.id)||(body.id==="topic-search"&&(await getSetting("channel_topic")).trim().length>0)||(!!knownPublisher&&!!dynamicPublisher))){
       await db().prepare("INSERT INTO sources(id,enabled) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled").bind(body.id,body.enabled?1:0).run();
       if(body.id==="topic-search")await setSetting("topic_search_enabled",body.enabled?"1":"0");return json({saved:true});
     }

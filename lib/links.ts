@@ -1,4 +1,4 @@
-const NEWS_DOMAINS = ["blog.sakugabooru.com", "natalie.mu", "anitrendz.net", "anigamers.com", "gematsu.com", "godotengine.org", "animecorner.me", "deadline.com", "stopgame.ru", "kinopoisk.ru", "ign.com", "pcgamer.com", "gamedeveloper.com", "eurogamer.net", "gamesindustry.biz", "animenewsnetwork.com", "crunchyroll.com", "variety.com", "hollywoodreporter.com", "dtf.ru", "ixbt.games", "shazoo.ru", "3dnews.ru", "kotaku.com", "polygon.com", "rockpapershotgun.com", "nintendolife.com", "pushsquare.com", "destructoid.com", "videogameschronicle.com", "gamingbolt.com", "theverge.com", "entertainmentweekly.com", "ew.com", "comicbook.com", "gamesradar.com", "screenrant.com", "kanobu.ru", "championat.com", "igromania.ru"];
+const BLOCKED_EDITORIAL_HOSTS = ["news.google.com", "t.me", "telegram.me", "telegram.dog", "telegram.org", "facebook.com", "instagram.com", "x.com", "twitter.com", "tiktok.com", "youtube.com", "youtu.be", "reddit.com", "wikipedia.org"];
 export function publicHttpsUrl(value: string): string | null {
   try {
     const u = new URL(value.trim()); const host = u.hostname.toLowerCase();
@@ -8,7 +8,7 @@ export function publicHttpsUrl(value: string): string | null {
 }
 export function newsArticleUrl(value: string): string | null {
   const safe = publicHttpsUrl(value); if (!safe) return null; const u = new URL(safe);
-  if (!NEWS_DOMAINS.some(d => u.hostname === d || u.hostname.endsWith("." + d)) || u.pathname === "/") return null;
+  if (BLOCKED_EDITORIAL_HOSTS.some(d => u.hostname === d || u.hostname.endsWith("." + d)) || u.pathname === "/") return null;
   for (const key of [...u.searchParams.keys()]) if (/^(utm_|fbclid$|gclid$)/i.test(key)) u.searchParams.delete(key);
   return u.href;
 }

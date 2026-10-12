@@ -1,5 +1,5 @@
 import { db, decrypt, encrypt, getSetting, initialize, lock, setSetting, unlock } from "./store";
-import { canonicalUrl, parseFeed, sameStory, SOURCES, topicSearchSource, INTERVAL_MINUTES, FEATURE_MAX_HOURS, freshEnough, isAnimeStory, rubric } from "./news";
+import { canonicalUrl, parseFeed, sameStory, SOURCES, topicSearchSource, publisherSource, INTERVAL_MINUTES, FEATURE_MAX_HOURS, freshEnough, rubric } from "./news";
 import { findArticleImages, loadPhoto } from "./media";
 import { newsArticleUrl, photoCaption, publicHttpsUrl } from "./links";
 export type Story = {id:string;url:string;title:string;excerpt:string;source_id:string;topic:string;published_at:string;collected_at:string;score:number;reason:string;status:string;draft:string;sent_at:string|null;message_id:string|null;review:string|null;publication_url:string|null;image_url:string|null;image_source_url:string|null;image_note:string|null;image_credit:string|null};
@@ -8,13 +8,13 @@ export async function state() {
   await initialize();
   await db().prepare("UPDATE stories SET status='uncertain' WHERE status='sending' AND sent_at < ?").bind(new Date(Date.now() - 180000).toISOString()).run();
   const [news, sourceRows, runs, autopilot, channel, bot, next, heartbeat, channelTopic, topicSearchEnabled] = await Promise.all([
-    db().prepare("SELECT * FROM (SELECT * FROM stories WHERE topic IN ('Аниме','Пользовательская') AND published_at >= ? AND status IN ('new','draft','failed') ORDER BY score DESC,published_at DESC LIMIT 300) UNION ALL SELECT * FROM (SELECT * FROM stories WHERE status IN ('sent','uncertain','sending') ORDER BY sent_at DESC LIMIT 100)").bind(new Date(Date.now()-FEATURE_MAX_HOURS*3600000).toISOString()).all<Story>(),
+    db().prepare("SELECT * FROM (SELECT * FROM stories WHERE published_at >= ? AND status IN ('new','draft','failed') ORDER BY score DESC,published_at DESC LIMIT 300) UNION ALL SELECT * FROM (SELECT * FROM stories WHERE status IN ('sent','uncertain','sending') ORDER BY sent_at DESC LIMIT 100)").bind(new Date(Date.now()-FEATURE_MAX_HOURS*3600000).toISOString()).all<Story>(),
     db().prepare("SELECT * FROM sources").all<{id:string;enabled:number;checked_at:string|null;error:string|null;count:number}>(),
     db().prepare("SELECT * FROM runs ORDER BY started_at DESC LIMIT 12").all(),
     getSetting("autopilot", "0"), getSetting("channel"), getSetting("bot_name"), getSetting("next_publish", "0"), getSetting("heartbeat"),
     getSetting("channel_topic"), getSetting("topic_search_enabled", "0"),
   ]);
-  const sourceList = channelTopic ? [...SOURCES, topicSearchSource(channelTopic)] : SOURCES;
+  const sourceList = [...SOURCES, ...(channelTopic ? [topicSearchSource(channelTopic)] : []), ...sourceRows.results.map(row => publisherSource(row.id)).filter((s): s is NonNullable<typeof s> => !!s)];
   if (channelTopic && !sourceRows.results.some(row=>row.id==="topic-search")) await db().prepare("INSERT OR IGNORE INTO sources(id,enabled) VALUES('topic-search',?)").bind(topicSearchEnabled==="1"?1:0).run();
   const currentSourceRows = channelTopic ? [...sourceRows.results, ...(!sourceRows.results.some(row=>row.id==="topic-search")?[{id:"topic-search",enabled:topicSearchEnabled==="1"?1:0,checked_at:null,error:null,count:0}]:[])] : sourceRows.results;
   return { stories:news.results.filter(s=>["sent","uncertain","sending"].includes(s.status)||(sourceList.some(source=>source.id===s.source_id)&&freshEnough(s.title,s.excerpt,s.published_at))), sources:sourceList.map(s=>({...s,...currentSourceRows.find(row=>row.id===s.id)})), runs:runs.results,
@@ -33,7 +33,7 @@ export async function collect() {
   await db().prepare("INSERT INTO runs(id,started_at,status,message) VALUES(?,?,'running','Сбор источников')").bind(id,started).run();
   try {
     const channelTopic=(await getSetting("channel_topic")).trim();
-    const sourceList=channelTopic?[...SOURCES,topicSearchSource(channelTopic)]:SOURCES;
+    const sourceList=channelTopic?[topicSearchSource(channelTopic)]:SOURCES;
     const enabled=(await db().prepare("SELECT id FROM sources WHERE enabled=1").all<{id:string}>()).results.map(s=>s.id).filter(id=>sourceList.some(source=>source.id===id));
     const previous=(await db().prepare("SELECT title FROM stories WHERE published_at>=?").bind(new Date(Date.now()-7*86400000).toISOString()).all<{title:string}>()).results.map(s=>s.title);
     for(let offset=0;offset<sourceList.length;offset+=3) {
@@ -43,12 +43,20 @@ export async function collect() {
       }));
       for(const {source,items,error} of batch) {
         if(error)failures++;
+        const publisherCounts=new Map<string,number>();
         for(const item of items) {
           if(previous.some(t=>sameStory(t,item.title)))continue;
+          if(item.sourceId.startsWith("publisher:")) {
+            await db().prepare("INSERT OR IGNORE INTO sources(id,enabled) VALUES(?,1)").bind(item.sourceId).run();
+            publisherCounts.set(item.sourceId,(publisherCounts.get(item.sourceId)||0)+1);
+            const publisherEnabled=(await db().prepare("SELECT enabled FROM sources WHERE id=?").bind(item.sourceId).first<{enabled:number}>())?.enabled;
+            if(!publisherEnabled)continue;
+          }
           const r=await db().prepare("INSERT OR IGNORE INTO stories(id,url,title,excerpt,source_id,topic,published_at,collected_at,score,reason) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(),item.url,item.title,item.excerpt,item.sourceId,item.topic,item.publishedAt,started,item.score,item.reason).run();
           if(r.meta.changes){count++;previous.push(item.title);}
         }
         await db().prepare("UPDATE sources SET checked_at=?,error=?,count=? WHERE id=?").bind(new Date().toISOString(),error,items.length,source.id).run();
+        for(const [publisherId,publisherCount] of publisherCounts) await db().prepare("UPDATE sources SET checked_at=?,error=NULL,count=? WHERE id=?").bind(new Date().toISOString(),publisherCount,publisherId).run();
       }
     }
     const message=`Новых: ${count}. Источников с ошибкой: ${failures}.`;
@@ -106,11 +114,11 @@ export async function publish(id:string,automatic=false) {
     const story=await db().prepare("SELECT * FROM stories WHERE id=?").bind(id).first<Story>();
     if(!story||story.status!=="draft"||story.draft.length<30)throw new Error("Сначала сохраните готовый текст поста.");
     const channelTopic=(await getSetting("channel_topic")).trim();
-    const sourceList=channelTopic?[...SOURCES,topicSearchSource(channelTopic)]:SOURCES;
-    const source=sourceList.find(s=>s.id===story.source_id);
-    if(!source||(story.source_id!=="topic-search"&&(story.topic!=="Аниме"||!isAnimeStory(story.title,story.excerpt,source))))throw new Error("Материал не относится к аниме-теме редакции.");
+    const sourceList=channelTopic?[topicSearchSource(channelTopic)]:SOURCES;
+    const source=sourceList.find(s=>s.id===story.source_id)||publisherSource(story.source_id);
+    if(!source||story.topic!=="Тема канала")throw new Error("Материал не относится к теме канала.");
     if(!freshEnough(story.title,story.excerpt,story.published_at))throw new Error("Материал устарел: новости — до 36 часов, интервью и закулисье — до 30 дней.");
-    if(rubric(story.title,story.excerpt)==="Факты и закулисье"&&Date.now()-Date.parse(story.published_at)>36*3600000&&!/из интервью|из архива|архивный факт/i.test(story.draft))throw new Error("Обозначьте давний материал словами «Из интервью» или «Из архива»; не выдавайте его за свежую новость.");
+    if(["Истории","Интервью"].includes(rubric(story.title,story.excerpt))&&Date.now()-Date.parse(story.published_at)>36*3600000&&!/из интервью|из архива/i.test(story.draft))throw new Error("Обозначьте давний материал словами «Из интервью» или «Из архива»; не выдавайте его за свежую новость.");
     if(automatic&&(!story.review||story.review.trim().length<20||story.score<50))throw new Error("Для автопубликации нужна проверка редактора и подходящая тема.");
     if(automatic&&!(await db().prepare("SELECT enabled FROM sources WHERE id=?").bind(story.source_id).first<{enabled:number}>())?.enabled)throw new Error("Источник отключён.");
     if(!canonicalUrl(story.url))throw new Error("Некорректная ссылка источника.");

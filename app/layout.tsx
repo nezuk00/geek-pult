@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Гик-пульт — редакция Telegram",
-  description: "Свежие новости игр, геймдева, аниме и сериалов для вашего Telegram-канала.",
+  title: "Телеграм-пульт — новости по вашей теме",
+  description: "Задайте тему Telegram-канала: приложение найдёт новости и издателей, редактор подготовит выпуск.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

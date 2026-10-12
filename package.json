@@ -1,5 +1,5 @@
 {
-  "name": "geek-pult",
+  "name": "telegram-pult",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -60,5 +60,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "description": "Закрытая редакция Telegram с RSS-сбором, проверкой новостей и управляемым поиском по теме канала."
+  "description": "Личная редакция Telegram: задайте тему, автоматически находите издателей и готовьте публикации."
 }
