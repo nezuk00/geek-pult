@@ -1,0 +1,31 @@
+name: Проверки
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Линт, типы, тесты и сборка
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получить исходный код
+        uses: actions/checkout@v4
+      - name: Установить Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Установить зависимости
+        run: npm ci --no-audit --no-fund
+      - name: Проверить стиль
+        run: npm run lint
+      - name: Проверить типы
+        run: npx tsc --noEmit
+      - name: Выполнить тесты
+        run: node --test tests/core.test.mjs
+      - name: Собрать приложение
+        run: npm run build
